@@ -1,6 +1,4 @@
 #!python
-import os
-
 from setuptools import find_packages, setup
 
 setup(
@@ -26,7 +24,7 @@ setup(
     ],
     entry_points=dict(
         console_scripts=[
-            "tagio_connector = tagoio_connector.main:main",
+            "tagoio_connector = tagoio_connector.main:main",
         ]
     ),
 )

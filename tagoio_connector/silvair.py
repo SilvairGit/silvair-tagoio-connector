@@ -2,6 +2,8 @@ import logging
 import os
 import tempfile
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from functools import partial
 
 import capnp
 import requests
@@ -12,38 +14,6 @@ capnp.remove_import_hook()
 DOMAIN = "api.platform-preprod.silvair.com"
 DIR = os.path.expanduser("~/.config/tagoio_connector")
 os.makedirs(DIR, exist_ok=True)
-
-
-def open_connection(project_id, email, password, partner_id="silvair"):
-    try:
-        with open(f"{DIR}/silvair_token") as token_file:
-            token = token_file.read()
-
-        requests.get(
-            f"https://{DOMAIN}/public/projects", headers={"Authorization": token}
-        ).raise_for_status()
-
-        logging.info("Reusing token for %s", email)
-
-    except (requests.HTTPError, FileNotFoundError):
-        token = None
-
-    if not token:
-        logging.info("Authenticating as %s", email)
-        response = requests.post(
-            f"https://{DOMAIN}/public/auth/login",
-            json=dict(partnerId=partner_id, email=email, password=password),
-        ).raise_for_status()
-
-        token = response.json()["token"]
-
-    with open(f"{DIR}/silvair_token", "w") as token_file:
-        token_file.write(token)
-
-    return websockets.connect(
-        f"wss://{DOMAIN}/public/projects/{project_id}/mesh",
-        extra_headers={"Authorization": token},
-    )
 
 
 async def send_multipart(connection, *frames):
@@ -64,6 +34,45 @@ async def recv_multipart(connection):
         frames.append(bytes(frame))
 
     return frames
+
+
+@asynccontextmanager
+async def open_connection(project_id, email, password, partner_id="silvair"):
+    try:
+        with open(f"{DIR}/silvair_token") as token_file:
+            token = token_file.read()
+
+        projects = requests.get(
+            f"https://{DOMAIN}/public/projects", headers={"Authorization": token}
+        )
+        projects.raise_for_status()
+
+        logging.info("Reusing token for %s", email)
+
+    except (requests.HTTPError, FileNotFoundError):
+        token = None
+
+    if not token:
+        logging.info("Authenticating as %s", email)
+        response = requests.post(
+            f"https://{DOMAIN}/public/auth/login",
+            json=dict(partnerId=partner_id, email=email, password=password),
+        )
+        response.raise_for_status()
+
+        token = response.json()["token"]
+
+    with open(f"{DIR}/silvair_token", "w") as token_file:
+        token_file.write(token)
+
+    async with websockets.connect(
+        f"wss://{DOMAIN}/public/projects/{project_id}/mesh",
+        extra_headers={"Authorization": token},
+    ) as connection:
+        connection.send_multipart = partial(send_multipart, connection)
+        connection.recv_multipart = partial(recv_multipart, connection)
+
+        yield connection
 
 
 def get_messages():
